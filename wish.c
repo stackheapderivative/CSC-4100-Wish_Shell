@@ -3,14 +3,15 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <fcntl.h> //pid_t
-#include<sys/wait.h> //for waitPid
+#include <fcntl.h> //open(), O_CREAT, O_TRUNC
+#include <sys/wait.h> //for waitPid
+#include <sys/types.h> //defines pid_t
 
 #define MAX_CMDS 64
 #define MAX_ARGS 64
 
 /*Error reporting: Anthony Hardy*/
-static const char err[] = "An error has occured!\n";
+static const char err[] = "An error has occurred.\n"; //Fixed a spelling error. :3
 
 static void displayError(void) {
 	write(STDERR_FILENO, err, sizeof(err) - 1);
@@ -54,15 +55,127 @@ static void tokenize_args(char *cmd, char *argv[MAX_ARGS]) {
     argv[argc] = NULL;
 }
 
+/* JOB 3 HELPERS - Alec Szczechowicz*/
+
+/* Counts how many arguments are in argv.*/
+static int count_args(char *argv[]) {
+    int count = 0;
+    while (argv[count] != NULL) {
+        count++;
+    }
+    return count;
+}
+
+/* Returns 1 if the command is a shell built-in, otherwise 0.*/
+static int is_builtin(char *argv[]) {
+    if (argv[0] == NULL) {
+        return 0;
+    }
+
+    return strcmp(argv[0], "exit") == 0 || strcmp(argv[0], "cd") == 0 || strcmp(argv[0], "path") == 0;
+}
+
+/* Frees all currently stored shell paths. */
+static void free_paths(char *paths[], int *nPath) {
+    for (int i = 0; i < *nPath; i++) {
+        free(paths[i]);
+        paths[i] = NULL;
+    }
+    *nPath = 0;
+}
+
+/* Runs built-in commands in the parent shell process. This is important because commands like cd must change the shell's own state, not a child process. */
+static void run_builtin(char *argv[], char *paths[], int *nPath) {
+    int argc = count_args(argv);
+
+    /* exit: make sure that there is no arguments */
+    if (strcmp(argv[0], "exit") == 0) {
+        if (argc != 1) {
+            displayError();
+            return;
+        }
+
+        /* Clean up allocated memory */
+        free_paths(paths, nPath);
+        exit(0);
+    }
+
+    /* cd: takes one argument */
+    if (strcmp(argv[0], "cd") == 0) {
+        if (argc != 2) {
+            displayError();
+            return;
+        }
+
+        if (chdir(argv[1]) != 0) {
+            displayError();
+        }
+        return;
+    }
+
+    /* path: replaces the current search path list */
+    if (strcmp(argv[0], "path") == 0) {
+        /* get rid of the old path */
+        free_paths(paths, nPath);
+
+        /* Add all new path entries after the word "path" */
+        for (int i = 1; argv[i] != NULL && *nPath < 64; i++) {
+            paths[*nPath] = strdup(argv[i]);
+            if (paths[*nPath] == NULL) {
+                displayError();
+                free_paths(paths, nPath);
+                return;
+            }
+            (*nPath)++;
+        }
+        return;
+    }
+}
+
+/* Searches through the shell's path list to find an executable. If found, returns a malloc for the full path. If not found, we return NULL. */
+static char *find_executable(char *cmd, char *paths[], int nPath) {
+    for (int i = 0; i < nPath; i++) {
+        size_t sizeNeeded = strlen(paths[i]) + strlen(cmd) + 2;
+        char *fullPath = malloc(sizeNeeded);
+        if (fullPath == NULL) {
+            displayError();
+            return NULL;
+        }
+
+        snprintf(fullPath, sizeNeeded, "%s/%s", paths[i], cmd);
+
+        /* checks whether the file exists and is executable. */
+        if (access(fullPath, X_OK) == 0) {
+            return fullPath;
+        }
+
+        free(fullPath);
+    }
+
+    return NULL;
+}
+
 int main(int argc, char **argv) {
 		printf("\nHello! Welcome to the Wisconsin(wi) Shell(sh)!\n This program was created by Anthony Hardy, Alec Szczechowicz, and Michai Hughes.\n");
 
 		/*Main loop: Anthony Hardy*/
 		FILE *in = NULL; //c sttream init
 		int interactive = 0; //bool value on whether ornot it is batch or interactive mode.
-		char input[2048];
-		char *paths[64] = {"/bin"}; //default path so access() actually finds commands
-		int nPath = 1;
+		char *input = NULL;
+		size_t inputLen = 0;
+		/*Alec: I changed this block of code because I think that if we try to free space using free_paths() later we will free(/bin) since its not allocated with malloc */
+		char *paths[64] = {0}; //default path so access() actually finds commands
+		int nPath = 0;
+
+		paths[0] = strdup("/bin");
+
+		if (paths[0] == NULL) {
+			displayError();
+			exit(1);
+		}
+
+		nPath = 1;
+
 		if (argc == 1) {
 			in = stdin;
 			interactive = 1; //interactive mode, on!
@@ -85,7 +198,7 @@ int main(int argc, char **argv) {
 				//flush stdout
 				fflush(stdout);
 			}
-			if (!fgets(input, sizeof(input), in)) {
+			if (getline(&input, &inputLen, in) == -1) {
 				break; //EOF or ctrl+d.
 			}
 
@@ -108,7 +221,7 @@ int main(int argc, char **argv) {
 					cmds[cmdc++] = segment;
 				}
 			}
-			pid_t kids[128]; //pid of child processes
+			pid_t kids[MAX_CMDS]; //pid of child processes
 			int numKids = 0; //number of children
 			//process each command segment
 			for (size_t i = 0; i < cmdc; i++) {
@@ -138,54 +251,27 @@ int main(int argc, char **argv) {
 
 				/*Handle fork, execv, outfile redirection, external cmds: Anthony Hardy*/
 	
-
-				//FIXME: ALEC, PUT SEPARATION OF CMD TO DEAL WITH > HERE
 				//ENSURE ONLY 1 OUTPUT FILE PER REDIRECTION!
 				//TIP: read 1st file argument, try to read a second, if 1st is no exist, or 2nd exist, error and loop.
 				//make sure a file name doesn't have > in it.
+				
+				if (is_builtin(args)) {
+					if (outFile != NULL) {
+						displayError();
+						continue;
+					}
 
-				/*Arg pointers for parallel: Anthony Hardy*/
-				char *argArray[128]; //arg pointers
-				int argCount = 0;
-				char *savePointer = NULL; //pointer for string tokens.
-
-				//loop and split args by space, until end of char array. we use strtok to keep reading args, loop ends when i is null.
-				char *token = strtok_r(cmd, " \t\r\n", &savePointer);
-				while (token != NULL && argCount < MAX_ARGS - 1) {
-					argArray[argCount++] = i;
-					argArray[argCount] = NULL;
-				}
-
-				argArray[argCount] = NULL; //null terminate for execv
-
-				if (argCount == 0) {
-					displayError();
+					run_builtin(args, paths, &nPath);
 					continue;
 				}
 
+				//Alec: Removed the loop here since it seemed a little bit redundant, or was just a placeholder. Also, removed redeclartion of variables.
 				//FIXME: ALEC, BUILT IN CMDS HERE
 
 				/*Parallel commands, fork new child processes: Anthony Hardy*/
-				char *fullPath = NULL;
-				for (int i = 0; i < nPATH; i++) {
-					size_t sizeNeeded = strlen(paths[i]) + 1 + strlen(argArray[0]) + 1; //calc size need to hold cmd path with / and /0
-					char *candidatePath = malloc(sizeNeeded);
-
-					if (!candidatePath) {
-						displayError();
-						break;
-					}
-					//build candidate path with command
-					snprintf(candidatePath, sizeNeeded, "%s/%s", paths[i], argArray[0]);
-					//check if file is real and can be ran, if fouhnd, get full path!
-					if (access(candidatePath, X_OK) == 0) {
-						fullPath = candidatePath;
-						break;
-					}
-					free(candidatePath);
-				}
-
-				if (!fullPath) {
+				/*Alec: using find_executable instead since this is part of the built-in*/
+				char *fullPath = find_executable(args[0], paths, nPath);
+				if (fullPath == NULL) {
 					displayError();
 					continue;
 				}
@@ -197,25 +283,40 @@ int main(int argc, char **argv) {
 					displayError();
 				} else if (pid == 0) {
 					//check for redir first in child process
-					if (cmdRedir) {
-						//open/create redir file. use 0644 so only owner can read write, others can only read.
-						int fd = open(cmdRedir, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+					/*Alec: Create a temporary array instead
+					made sure to use the correct outFile variable, use the correct args
+					and validate file count*/
+					if(outFile != NULL) {
+						/*We want to split output section into tokens */
+						char *redirArgs[MAX_ARGS];
+						tokenize_args(outFile, redirArgs);
+
+						/*Make sure that we have just one output file*/
+						if (redirArgs[0] == NULL || redirArgs[1] != NULL) {
+							displayError();
+							exit(1);
+						}
+
+						int fd = open(redirArgs[0], O_CREAT | O_TRUNC | O_WRONLY, 0644);
 						if (fd < 0) {
-							//exit on failure!
 							displayError();
 							exit(1);
 						}
+
 						if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
-							//error if redir to file or stderr fail, exit.
+							close(fd);
 							displayError();
 							exit(1);
 						}
+
 						close(fd);
+
 					}
-										//replace child with new exe and path
-					execv(fullPath, argArray);
-					displayError(); //if child return, then it is an error.
+
+					execv(fullPath, args);
+					displayError();
 					exit(1);
+
 				} else {
 					if (numKids < MAX_CMDS) {
 						kids[numKids++] = pid;
@@ -225,10 +326,6 @@ int main(int argc, char **argv) {
 					free(fullPath);
 				}
 
-				//debug print to show it works: Michai Hughes
-
-				printf("Executing: %s\n", args[0]);
-				if (outFile) printf(" Redirecting output to: %s\n", outFile);
 			}
 
 				//prevent zombie child!
@@ -237,6 +334,10 @@ int main(int argc, char **argv) {
 			}
 		}
 		if (in != stdin) fclose(in);
+
+		free(input); //free getline's buffer
+		free_paths(paths, &nPath); //Alec: Added this to make sure that we free path memory before the program ends.
+
 		return 0;
 
 }
