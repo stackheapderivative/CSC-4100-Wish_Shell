@@ -116,8 +116,9 @@ static void run_builtin(char *argv[], char *paths[], int *nPath) {
     /* path: replaces the current search path list */
     if (strcmp(argv[0], "path") == 0) {
         /* get rid of the old path */
-        free_paths(paths, nPath);
-
+        if (argc > 1) { //prevents freeing /bin
+			free_paths(paths, nPath);
+		}
         /* Add all new path entries after the word "path" */
         for (int i = 1; argv[i] != NULL && *nPath < 64; i++) {
             paths[*nPath] = strdup(argv[i]);
@@ -266,7 +267,6 @@ int main(int argc, char **argv) {
 				}
 
 				//Alec: Removed the loop here since it seemed a little bit redundant, or was just a placeholder. Also, removed redeclartion of variables.
-				//FIXME: ALEC, BUILT IN CMDS HERE
 
 				/*Parallel commands, fork new child processes: Anthony Hardy*/
 				/*Alec: using find_executable instead since this is part of the built-in*/
