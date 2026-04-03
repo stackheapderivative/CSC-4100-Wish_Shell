@@ -7,6 +7,17 @@
 #include <sys/wait.h> //for waitPid
 #include <sys/types.h> //defines pid_t
 
+
+/*
+Authors: Anthony Hardy, Alec Szczechowicz, Michai Hughes
+Class: CSC 4100-001
+Date: 4/2/2026
+Description: A UNIX shell supporting interactive and batch modes and also executes external programs using fork/execv and handles parallel commands as long as they are separated by a "&" handles output redirection with ">" and three builtin commands exit, cd, and path.
+
+AI Disclaimer: AI was utilized in this project only to search for bugs, research, and test the shell after all features were implemented. Claude and ChatGPT were used.
+
+*/
+
 #define MAX_CMDS 64
 #define MAX_ARGS 64
 
